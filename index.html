@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>shailesh.net</title>
+    <style>
+        :root {
+            --bg-color: #040406;
+            --matrix-glow: rgba(0, 255, 136, 0.35);
+            --synth-pink: #ff0055;
+            --cyan-glow: #00f3ff;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            font-family: monospace;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+            mix-blend-mode: screen;
+        }
+
+        body::after {
+            content: " ";
+            display: block;
+            position: absolute;
+            top: 0; left: 0; bottom: 0; right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.2) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.04), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.04));
+            z-index: 10;
+            background-size: 100% 4px, 6px 100%;
+            pointer-events: none;
+        }
+
+        #audio-gate {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, rgba(8,8,20,0.95) 0%, rgba(4,4,6,1) 100%);
+            z-index: 100;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transition: opacity 1s ease-out;
+            cursor: pointer;
+        }
+
+        .pulse-ring {
+            width: 90px;
+            height: 90px;
+            border: 2px solid var(--matrix-glow);
+            border-radius: 50%;
+            animation: pulse 2s infinite ease-out;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(0.5); opacity: 1; }
+            100% { transform: scale(2.3); opacity: 0; }
+        }
+
+        .secret-anchor {
+            position: absolute;
+            bottom: 25px;
+            right: 25px;
+            z-index: 50;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+            opacity: 0.12;
+            padding: 10px;
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+
+        .secret-anchor:hover {
+            opacity: 1;
+            transform: scale(1.08);
+        }
+
+        .node-dot {
+            width: 8px;
+            height: 8px;
+            background-color: #00ff88;
+            border-radius: 50%;
+            box-shadow: 0 0 10px #00ff88;
+        }
+
+        #core-gate {
+            font-size: 12px;
+            letter-spacing: 4px;
+            color: #00ff88;
+            text-shadow: 0 0 8px var(--matrix-glow);
+            font-weight: bold;
+        }
+
+        #easter-egg-canvas {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0);
+            width: 400px;
+            height: 400px;
+            z-index: 40;
+            pointer-events: none;
+            transition: transform 0.7s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        #easter-egg-canvas.active {
+            transform: translate(-50%, -50%) scale(1);
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="audio-gate">
+        <div class="pulse-ring"></div>
+    </div>
+
+    <canvas id="stage"></canvas>
+    <canvas id="easter-egg-canvas"></canvas>
+
+    <a href="https://github.com/shailesh17" class="secret-anchor" target="_blank" rel="noopener noreferrer">
+        <span class="node-dot"></span>
+        <span id="core-gate">SRC</span>
+    </a>
+
+    <script>
+        const canvas = document.getElementById('stage');
+        const ctx = canvas.getContext('2d');
+        const audioGate = document.getElementById('audio-gate');
+        const eggCanvas = document.getElementById('easter-egg-canvas');
+        const eggCtx = eggCanvas.getContext('2d');
+
+        let width, height;
+        let particles = [];
+        let interactionNode = { x: null, y: null, targetX: null, targetY: null, intensity: 0 };
+        let audioStarted = false;
+        let audioCtx, schedulerTimeout;
+
+        let clickCount = 0;
+        let clickTimer = null;
+        let eggActive = false;
+        let eggRotation = 0;
+
+        const PARTICLE_COUNT = window.innerWidth < 768 ? 100 : 260;
+        const BASE_SPEED = -0.5;
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            eggCanvas.width = 400;
+            eggCanvas.height = 400;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        class Particle {
+            constructor() {
+                this.reset();
+                this.y = Math.random() * height;
+            }
+
+            reset() {
+                this.x = Math.random() * width;
+                this.y = height + Math.random() * 20 + 5;
+                this.radius = Math.random() * 2.2 + 0.6;
+                this.speedY = BASE_SPEED - (Math.random() * 0.7);
+                this.speedX = (Math.random() - 0.5) * 0.3;
+                this.charge = Math.random() * 100;
+                this.freq = 0.015 + Math.random() * 0.025;
+                this.hue = Math.random() > 0.85 ? 330 : 160;
+            }
+
+            update(modX, modY, intensity) {
+                this.y += this.speedY * (1 + intensity * 1.5);
+                this.x += this.speedX + Math.sin(this.charge) * 0.15;
+                this.charge += this.freq;
+
+                if (modX !== null && modY !== null) {
+                    const dx = this.x - modX;
+                    const dy = this.y - modY;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    const maxDist = 160;
+
+                    if (dist < maxDist) {
+                        const force = (maxDist - dist) / maxDist;
+                        this.x += (dx / dist) * force * 3.5;
+                        this.y += (dy / dist) * force * 3.5;
+                    }
+                }
+
+                if (this.y < -10 || this.x < -10 || this.x > width + 10) {
+                    this.reset();
+                }
+            }
+
+            draw() {
+                ctx.beginPath();
+                const alpha = this.radius > 1.5 ? 0.35 : 0.2;
+                ctx.fillStyle = `hsla(${this.hue}, 85%, 60%, ${alpha})`;
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function initParticles() {
+            particles = [];
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                particles.push(new Particle());
+            }
+        }
+        initParticles();
+
+        function drawMesh() {
+            for (let i = 0; i < particles.length; i++) {
+                for (let j = i + 1; j < particles.length; j++) {
+                    const pi = particles[i];
+                    const pj = particles[j];
+                    const dx = pi.x - pj.x;
+                    const dy = pi.y - pj.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    const thresh = 70;
+
+                    if (dist < thresh) {
+                        ctx.beginPath();
+                        const opacity = (1 - (dist / thresh)) * 0.14;
+                        ctx.strokeStyle = `hsla(${pi.hue}, 80%, 55%, ${opacity})`;
+                        ctx.lineWidth = 0.5;
+                        ctx.moveTo(pi.x, pi.y);
+                        ctx.lineTo(pj.x, pj.y);
+                        ctx.stroke();
+                    }
+                }
+            }
+        }
+
+        function handleInteraction(x, y) {
+            interactionNode.targetX = x;
+            interactionNode.targetY = y;
+            interactionNode.intensity = Math.min(interactionNode.intensity + 0.1, 1.0);
+        }
+
+        window.addEventListener('mousemove', (e) => handleInteraction(e.clientX, e.clientY));
+        window.addEventListener('touchmove', (e) => {
+            if (e.touches.length > 0) {
+                handleInteraction(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        }, { passive: true });
+
+        window.addEventListener('click', (e) => {
+            if (!audioStarted) return;
+            if (e.target.closest('.secret-anchor')) {
+                cycleTrack();
+                return;
+            }
+
+            clickCount++;
+            clearTimeout(clickTimer);
+            
+            if (clickCount >= 5) {
+                triggerAndroidEgg();
+                clickCount = 0;
+            } else {
+                clickTimer = setTimeout(() => { clickCount = 0; }, 400);
+            }
+        });
+
+        function triggerAndroidEgg() {
+            eggActive = !eggActive;
+            if (eggActive) {
+                eggCanvas.className = 'active';
+                cycleTrack();
+            } else {
+                eggCanvas.className = '';
+            }
+        }
+
+        function loop() {
+            ctx.fillStyle = 'rgba(4, 4, 6, 0.25)';
+            ctx.fillRect(0, 0, width, height);
+
+            if (interactionNode.targetX !== null) {
+                interactionNode.x += (interactionNode.targetX - interactionNode.x) * 0.1;
+                interactionNode.y += (interactionNode.targetY - interactionNode.y) * 0.1;
+                interactionNode.intensity *= 0.95;
+            }
+
+            particles.forEach(p => {
+                p.update(interactionNode.x, interactionNode.y, interactionNode.intensity);
+                p.draw();
+            });
+
+            drawMesh();
+
+            if (eggActive) {
+                eggCtx.clearRect(0, 0, 400, 400);
+                eggCtx.save();
+                eggCtx.translate(200, 200);
+                
+                eggRotation += 0.01 + (interactionNode.intensity * 0.04);
+                eggCtx.rotate(eggRotation);
+                
+                eggCtx.beginPath();
+                for (let i = 0; i < 6; i++) {
+                    let angle = (Math.PI / 3) * i;
+                    let x = Math.cos(angle) * 110;
+                    let y = Math.sin(angle) * 110;
+                    if (i === 0) eggCtx.moveTo(x, y);
+                    else eggCtx.lineTo(x, y);
+                }
+                eggCtx.closePath();
+                eggCtx.strokeStyle = '#00f3ff';
+                eggCtx.lineWidth = 4;
+                eggCtx.shadowBlur = 15;
+                eggCtx.shadowColor = '#00f3ff';
+                eggCtx.stroke();
+
+                eggCtx.beginPath();
+                eggCtx.moveTo(0, -85);
+                eggCtx.lineTo(75, -55);
+                eggCtx.lineTo(65, 30);
+                eggCtx.quadraticCurveTo(55, 85, 0, 105);
+                eggCtx.quadraticCurveTo(-55, 85, -65, 30);
+                eggCtx.lineTo(-75, -55);
+                eggCtx.closePath();
+                eggCtx.strokeStyle = '#ff0055';
+                eggCtx.lineWidth = 3;
+                eggCtx.shadowColor = '#ff0055';
+                eggCtx.stroke();
+
+                eggCtx.beginPath();
+                eggCtx.lineWidth = 7;
+                eggCtx.strokeStyle = '#00ff88';
+                eggCtx.shadowColor = '#00ff88';
+                eggCtx.lineCap = "round";
+                eggCtx.lineJoin = "miter";
+                
+                eggCtx.moveTo(40, -40);
+                eggCtx.lineTo(-30, -40);
+                eggCtx.lineTo(-35, 0);
+                eggCtx.lineTo(35, 0);
+                eggCtx.lineTo(30, 45);
+                eggCtx.lineTo(-40, 45);
+                eggCtx.stroke();
+
+                eggCtx.restore();
+            }
+
+            requestAnimationFrame(loop);
+        }
+        requestAnimationFrame(loop);
+
+        const tracks = [
+            {
+                name: "Sweet Dreams - Eurythmics",
+                tempo: 124,
+                bass: [36, 48, 36, 36, 43, 48, 41, 40, 36, 48, 36, 36, 43, 48, 41, 40],
+                lead: [60, 0, 63, 0, 65, 0, 67, 0, 68, 0, 67, 0, 63, 0, 60, 0]
+            },
+            {
+                name: "Billie Jean - Michael Jackson",
+                tempo: 116,
+                bass: [42, 0, 46, 0, 49, 0, 46, 0, 44, 0, 46, 0, 44, 0, 41, 0],
+                lead: [70, 70, 0, 73, 0, 70, 0, 68, 0, 0, 70, 70, 0, 73, 0, 70]
+            },
+            {
+                name: "Take On Me - A-ha",
+                tempo: 160,
+                bass: [38, 38, 43, 43, 45, 45, 40, 40, 38, 38, 43, 43, 45, 45, 47, 47],
+                lead: [74, 74, 69, 66, 66, 71, 71, 71, 73, 73, 74, 76, 74, 73, 69, 66]
+            }
+        ];
+
+        let currentTrackIdx = 0;
+        let step = 0;
+        let nextStepTime = 0;
+        let stepDuration = 0.25;
+
+        function cycleTrack() {
+            currentTrackIdx = (currentTrackIdx + 1) % tracks.length;
+            step = 0;
+            if (audioCtx) {
+                stepDuration = 60 / tracks[currentTrackIdx].tempo / 2;
+                nextStepTime = audioCtx.currentTime;
+            }
+        }
+
+        function playSynthStep(time) {
+            const currentTrack = tracks[currentTrackIdx];
+
+            function midiToFreq(note) {
+                return note === 0 ? 0 : 440 * Math.pow(2, (note - 69) / 12);
+            }
+
+            let bassNote = currentTrack.bass[step % currentTrack.bass.length];
+            if (bassNote > 0) {
+                let osc = audioCtx.createOscillator();
+                let gain = audioCtx.createGain();
+                
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(midiToFreq(bassNote), time);
+                
+                gain.gain.setValueAtTime(0.24, time);
+                gain.gain.exponentialRampToValueAtTime(0.01, time + stepDuration * 0.85);
+                
+                let filter = audioCtx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.setValueAtTime(450, time);
+
+                osc.connect(filter);
+                filter.connect(gain);
+                gain.connect(audioCtx.destination);
+                
+                osc.start(time);
+                osc.stop(time + stepDuration);
+            }
+
+            let leadNote = currentTrack.lead[step % currentTrack.lead.length];
+            if (leadNote > 0) {
+                let oscLead = audioCtx.createOscillator();
+                let gainLead = audioCtx.createGain();
+                
+                oscLead.type = 'square';
+                oscLead.frequency.setValueAtTime(midiToFreq(leadNote), time);
+                
+                gainLead.gain.setValueAtTime(0.09, time);
+                gainLead.gain.exponentialRampToValueAtTime(0.005, time + stepDuration * 1.5);
+                
+                let leadFilter = audioCtx.createBiquadFilter();
+                leadFilter.type = 'lowpass';
+                leadFilter.frequency.setValueAtTime(1200 + (interactionNode.intensity * 400), time);
+
+                oscLead.connect(leadFilter);
+                leadFilter.connect(gainLead);
+                gainLead.connect(audioCtx.destination);
+                
+                oscLead.start(time);
+                oscLead.stop(time + stepDuration * 1.8);
+            }
+
+            step++;
+        }
+
+        function scheduler() {
+            while (nextStepTime < audioCtx.currentTime + 0.1) {
+                playSynthStep(nextStepTime);
+                nextStepTime += stepDuration;
+            }
+            schedulerTimeout = setTimeout(scheduler, 25);
+        }
+
+        function startAudioEngine() {
+            if (audioStarted) return;
+            audioStarted = true;
+            
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            stepDuration = 60 / tracks[currentTrackIdx].tempo / 2;
+            nextStepTime = audioCtx.currentTime;
+            
+            scheduler();
+        }
+
+        audioGate.addEventListener('click', () => {
+            audioGate.style.opacity = '0';
+            setTimeout(() => audioGate.remove(), 1000);
+            startAudioEngine();
+        });
+    </script>
+</body>
+</html>
